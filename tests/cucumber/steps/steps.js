@@ -2120,6 +2120,23 @@ module.exports = function getSteps(options) {
     }
   );
 
+  When(
+    'we make a Get Block call for round {int} with format {string} and header-only {string}',
+    async function (round, format, headerOnly) {
+      if (format !== 'msgpack') {
+        assert.fail('this SDK only supports format msgpack for this function');
+      }
+
+      const builder = this.v2Client.block(round);
+      const hob = headerOnly.toLowerCase() === 'true';
+
+      if (hob) {
+        builder.headerOnly(hob);
+      }
+      await doOrDoRaw(builder);
+    }
+  );
+
   When('we make a GetAssetByID call for assetID {int}', async function (index) {
     await doOrDoRaw(this.v2Client.getAssetByID(index));
   });
@@ -2297,7 +2314,17 @@ module.exports = function getSteps(options) {
   let anyBlockResponse;
 
   When('we make any Get Block call', async function () {
-    anyBlockResponse = await doOrDoRaw(this.v2Client.block(1));
+    const req = this.v2Client.block(1);
+    if (responseFormat === 'json') {
+      // for json responses, we need to set the format query param and provide a custom decoder
+      // because the default block request only supports msgpack
+      req.query.format = responseFormat;
+      req.prepare = (response) => {
+        const body = new TextDecoder().decode(response.body);
+        return algosdk.decodeJSON(body, algosdk.modelsv2.BlockResponse);
+      };
+    }
+    anyBlockResponse = await doOrDoRaw(req);
   });
 
   Then(
@@ -2311,6 +2338,44 @@ module.exports = function getSteps(options) {
         anyBlockResponse.block.header.rewardState.rewardsPool.publicKey
       );
       assert.strictEqual(rewardsPoolAddress, rewardsPoolB64String);
+    }
+  );
+
+  Then(
+    'the parsed Get Block response should have rewards pool {string} and no certificate or payset',
+    (rewardsPoolAddress) => {
+      assert.ok(
+        anyBlockResponse.block.header.rewardState.rewardsPool instanceof
+          algosdk.Address
+      );
+      const rewardsPoolB64String = algosdk.bytesToBase64(
+        anyBlockResponse.block.header.rewardState.rewardsPool.publicKey
+      );
+      assert.strictEqual(rewardsPoolAddress, rewardsPoolB64String);
+
+      assert.strictEqual(
+        anyBlockResponse.cert,
+        undefined,
+        'Cert should be undefined'
+      );
+      assert.strictEqual(
+        anyBlockResponse.block.payset.length,
+        0,
+        'Payset should be empty'
+      );
+    }
+  );
+
+  Then(
+    'the parsed Get Block response should have heartbeat address {string}',
+    (hbAddress) => {
+      assert.ok(
+        anyBlockResponse.block.payset[0].signedTxn.signedTxn.txn.heartbeat
+          .address instanceof algosdk.Address
+      );
+      const hbAddressString =
+        anyBlockResponse.block.payset[0].signedTxn.signedTxn.txn.heartbeat.address.toString();
+      assert.strictEqual(hbAddress, hbAddressString);
     }
   );
 
@@ -2707,6 +2772,47 @@ module.exports = function getSteps(options) {
   );
 
   When(
+    'we make a Search For BlockHeaders call with minRound {int} maxRound {int} limit {int} nextToken {string} beforeTime {string} afterTime {string} proposers {string} expired {string} absent {string}',
+    async function (
+      minRound,
+      maxRound,
+      limit,
+      nextToken,
+      beforeTime,
+      afterTime,
+      proposers,
+      expired,
+      absent
+    ) {
+      const builder = this.indexerClient
+        .searchForBlockHeaders()
+        .afterTime(afterTime)
+        .beforeTime(beforeTime)
+        .limit(limit)
+        .maxRound(maxRound)
+        .minRound(minRound)
+        .nextToken(nextToken);
+
+      if (proposers !== null && proposers.trim().length > 0) {
+        const proposersArray = proposers.split(',');
+        builder.proposers(proposersArray);
+      }
+
+      if (expired !== null && expired.trim().length > 0) {
+        const expiredArray = expired.split(',');
+        builder.expired(expiredArray);
+      }
+
+      if (absent !== null && absent.trim().length > 0) {
+        const absentArray = absent.split(',');
+        builder.absent(absentArray);
+      }
+
+      await doOrDoRaw(builder);
+    }
+  );
+
+  When(
     'we make a Search For Transactions call with account {string} NotePrefix {string} TxType {string} SigType {string} txid {string} round {int} minRound {int} maxRound {int} limit {int} beforeTime {string} afterTime {string} currencyGreaterThan {int} currencyLessThan {int} assetIndex {int} addressRole {string} ExcluseCloseTo {string} rekeyTo {string}',
     async function (
       account,
@@ -3067,6 +3173,47 @@ module.exports = function getSteps(options) {
       assert.strictEqual(
         anySearchForTransactionsResponse.transactions[idx].rekeyTo,
         rekeyTo
+      );
+    }
+  );
+
+  Then(
+    'the parsed SearchForTransactions response should be valid on round {int} and the array should be of len {int} and the element at index {int} should have hbaddress {string}',
+    (round, length, idx, hbAddress) => {
+      assert.strictEqual(
+        anySearchForTransactionsResponse.currentRound,
+        BigInt(round)
+      );
+      assert.strictEqual(
+        anySearchForTransactionsResponse.transactions.length,
+        length
+      );
+      assert.strictEqual(
+        anySearchForTransactionsResponse.transactions[idx].heartbeatTransaction
+          .hbAddress,
+        hbAddress
+      );
+    }
+  );
+
+  let anySearchForBlockHeadersResponse;
+
+  When('we make any SearchForBlockHeaders call', async function () {
+    anySearchForBlockHeadersResponse = await this.indexerClient
+      .searchForBlockHeaders()
+      .do();
+  });
+
+  Then(
+    'the parsed SearchForBlockHeaders response should have a block array of len {int} and the element at index {int} should have round {string}',
+    (length, idx, roundStr) => {
+      assert.strictEqual(
+        anySearchForBlockHeadersResponse.blocks.length,
+        length
+      );
+      assert.strictEqual(
+        anySearchForBlockHeadersResponse.blocks[idx].round,
+        BigInt(roundStr)
       );
     }
   );
